@@ -469,6 +469,8 @@ const rings = ["Ring 0", "Ring 1", "Ring 2", "Ring 4", "EDU", "GCCH", "DoD", "Ga
 
 let accountsData = {};
 const storageKey = "teamsCoreAccountsData";
+const supabaseAccountsUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/accounts";
+const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZXV1dm9oYXNraGptYmxxZnFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MzYzNzUsImV4cCI6MjA5MjUxMjM3NX0.LnrZkxi7ajawWdQ_9k2wFuWWRgm0DaRhdlHISUH-x5Q";
 
 const ringScenarios = {
   "Ring 0": { label: "Pilot", tone: "pilot" },
@@ -483,6 +485,67 @@ const ringScenarios = {
 };
 
 rings.forEach(r => accountsData[r] = []);
+
+function resetAccountsData() {
+  rings.forEach(r => accountsData[r] = []);
+}
+
+function getSupabaseHeaders(prefer) {
+  const headers = {
+    apikey: supabaseAnonKey,
+    Authorization: `Bearer ${supabaseAnonKey}`,
+    "Content-Type": "application/json"
+  };
+
+  if (prefer) {
+    headers.Prefer = prefer;
+  }
+
+  return headers;
+}
+
+function normalizeAccount(account) {
+  return {
+    id: account.id || null,
+    ring: account.ring || "",
+    username: account.username || "",
+    email: account.email || "",
+    password: account.password || "",
+    license: account.license || ""
+  };
+}
+
+function groupAccounts(accounts) {
+  resetAccountsData();
+
+  accounts.forEach(account => {
+    const normalizedAccount = normalizeAccount(account);
+
+    if (rings.includes(normalizedAccount.ring)) {
+      accountsData[normalizedAccount.ring].push(normalizedAccount);
+    }
+  });
+}
+
+async function loadAccountsFromSupabase() {
+  try {
+    const response = await fetch(`${supabaseAccountsUrl}?select=id,ring,username,email,password,license&order=created_at.asc`, {
+      headers: getSupabaseHeaders()
+    });
+
+    if (!response.ok) {
+      throw new Error(`Supabase load failed: ${response.status}`);
+    }
+
+    const accounts = await response.json();
+    groupAccounts(accounts);
+    saveAccounts();
+    return true;
+  } catch (e) {
+    console.warn("Could not load accounts from Supabase:", e);
+    return false;
+  }
+}
 
 function loadSavedAccounts() {
   const savedAccounts = localStorage.getItem(storageKey);
@@ -504,6 +567,57 @@ function loadSavedAccounts() {
 
 function saveAccounts() {
   localStorage.setItem(storageKey, JSON.stringify(accountsData));
+}
+
+async function insertAccount(account) {
+  const response = await fetch(supabaseAccountsUrl, {
+    method: "POST",
+    headers: getSupabaseHeaders("return=representation"),
+    body: JSON.stringify(account)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Supabase insert failed: ${response.status}`);
+  }
+
+  const insertedAccounts = await response.json();
+  return normalizeAccount(insertedAccounts[0]);
+}
+
+async function updateAccountInSupabase(account) {
+  if (!account.id) {
+    return;
+  }
+
+  const response = await fetch(`${supabaseAccountsUrl}?id=eq.${account.id}`, {
+    method: "PATCH",
+    headers: getSupabaseHeaders(),
+    body: JSON.stringify({
+      username: account.username,
+      email: account.email,
+      password: account.password,
+      license: account.license
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Supabase update failed: ${response.status}`);
+  }
+}
+
+async function deleteAccountFromSupabase(account) {
+  if (!account.id) {
+    return;
+  }
+
+  const response = await fetch(`${supabaseAccountsUrl}?id=eq.${account.id}`, {
+    method: "DELETE",
+    headers: getSupabaseHeaders()
+  });
+
+  if (!response.ok) {
+    throw new Error(`Supabase delete failed: ${response.status}`);
+  }
 }
 
 function escapeAttribute(value) {
@@ -645,21 +759,45 @@ function renderAccounts(ring) {
   `;
 }
 
-function updateField(ring, index, field, value) {
+async function updateField(ring, index, field, value) {
   accountsData[ring][index][field] = value;
   saveAccounts();
+
+  try {
+    await updateAccountInSupabase(accountsData[ring][index]);
+  } catch (e) {
+    console.warn("Could not update account in Supabase:", e);
+  }
 }
 
-function addAccount(ring) {
-  accountsData[ring].push({ username: "", password: "" });
+async function addAccount(ring) {
+  const account = { ring, username: "", email: "", password: "", license: "" };
+
+  try {
+    const insertedAccount = await insertAccount(account);
+    accountsData[ring].push(insertedAccount);
+  } catch (e) {
+    console.warn("Could not add account to Supabase:", e);
+    accountsData[ring].push(account);
+    alert("Saved in this browser only. Please check Supabase table permissions.");
+  }
+
   saveAccounts();
   renderAccounts(ring);
 }
 
-function deleteAccount(ring, index) {
+async function deleteAccount(ring, index) {
+  const account = accountsData[ring][index];
   accountsData[ring].splice(index, 1);
   saveAccounts();
   renderAccounts(ring);
+
+  try {
+    await deleteAccountFromSupabase(account);
+  } catch (e) {
+    console.warn("Could not delete account from Supabase:", e);
+    alert("Deleted locally, but Supabase delete failed. Please check table permissions.");
+  }
 }
 
 async function createTeamsAccount(ring) {
@@ -678,17 +816,15 @@ async function createTeamsAccount(ring) {
 
   console.log("Creating account:", payload);
 
-  // Connect to backend (Power Automate / API)
   try {
-    await fetch("YOUR_FLOW_OR_API_URL", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    alert("Account creation request sent!");
+    const insertedAccount = await insertAccount(payload);
+    accountsData[ring].push(insertedAccount);
+    saveAccounts();
+    renderAccounts(ring);
+    alert("Account saved to Supabase!");
   } catch (e) {
-    alert("Error connecting to backend");
+    console.warn("Could not save account to Supabase:", e);
+    alert("Error saving to Supabase. Please check table permissions.");
   }
 }
 
@@ -698,8 +834,17 @@ function goBack() {
   loadMainPage();
 }
 
-loadSavedAccounts();
-loadMainPage();
+async function initApp() {
+  const loadedFromSupabase = await loadAccountsFromSupabase();
+
+  if (!loadedFromSupabase) {
+    loadSavedAccounts();
+  }
+
+  loadMainPage();
+}
+
+initApp();
 </script>
 
 </body>
