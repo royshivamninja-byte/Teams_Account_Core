@@ -468,6 +468,7 @@ button:active {
 const rings = ["Ring 0", "Ring 1", "Ring 2", "Ring 4", "EDU", "GCCH", "DoD", "Gallatin", "Auth"];
 
 let accountsData = {};
+const storageKey = "teamsCoreAccountsData";
 
 const ringScenarios = {
   "Ring 0": { label: "Pilot", tone: "pilot" },
@@ -482,6 +483,36 @@ const ringScenarios = {
 };
 
 rings.forEach(r => accountsData[r] = []);
+
+function loadSavedAccounts() {
+  const savedAccounts = localStorage.getItem(storageKey);
+
+  if (!savedAccounts) {
+    return;
+  }
+
+  try {
+    const parsedAccounts = JSON.parse(savedAccounts);
+
+    rings.forEach(r => {
+      accountsData[r] = Array.isArray(parsedAccounts[r]) ? parsedAccounts[r] : [];
+    });
+  } catch (e) {
+    console.warn("Could not load saved accounts:", e);
+  }
+}
+
+function saveAccounts() {
+  localStorage.setItem(storageKey, JSON.stringify(accountsData));
+}
+
+function escapeAttribute(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
 
 function loadMainPage() {
   const container = document.getElementById("mainPage");
@@ -560,8 +591,8 @@ function renderAccounts(ring) {
           <tbody>
             ${accountsData[ring].map((acc, i) => `
               <tr>
-                <td><input value="${acc.username}" onchange="updateField('${ring}', ${i}, 'username', this.value)" /></td>
-                <td><input value="${acc.password}" onchange="updateField('${ring}', ${i}, 'password', this.value)" /></td>
+                <td><input value="${escapeAttribute(acc.username)}" oninput="updateField('${ring}', ${i}, 'username', this.value)" /></td>
+                <td><input value="${escapeAttribute(acc.password)}" oninput="updateField('${ring}', ${i}, 'password', this.value)" /></td>
                 <td><button class="delete-btn" onclick="deleteAccount('${ring}', ${i})">Delete</button></td>
               </tr>
             `).join("") || `
@@ -616,15 +647,18 @@ function renderAccounts(ring) {
 
 function updateField(ring, index, field, value) {
   accountsData[ring][index][field] = value;
+  saveAccounts();
 }
 
 function addAccount(ring) {
   accountsData[ring].push({ username: "", password: "" });
+  saveAccounts();
   renderAccounts(ring);
 }
 
 function deleteAccount(ring, index) {
   accountsData[ring].splice(index, 1);
+  saveAccounts();
   renderAccounts(ring);
 }
 
@@ -664,6 +698,7 @@ function goBack() {
   loadMainPage();
 }
 
+loadSavedAccounts();
 loadMainPage();
 </script>
 
