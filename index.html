@@ -286,7 +286,7 @@ td {
 }
 
 .actions-col {
-  width: 116px;
+  width: 190px;
 }
 
 th {
@@ -418,6 +418,26 @@ button:active {
   color: #9f1239;
 }
 
+.update-btn {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  box-shadow: none;
+  color: #047857;
+  min-height: 38px;
+  padding: 8px 12px;
+}
+
+.update-btn:hover {
+  background: #d1fae5;
+  box-shadow: 0 10px 20px rgba(5, 150, 105, 0.14);
+  color: #065f46;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .divider {
   border: none;
   border-top: 1px solid var(--line);
@@ -471,6 +491,10 @@ let accountsData = {};
 const storageKey = "teamsCoreAccountsData";
 const supabaseAccountsUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/accounts";
 const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZXV1dm9oYXNraGptYmxxZnFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MzYzNzUsImV4cCI6MjA5MjUxMjM3NX0.LnrZkxi7ajawWdQ_9k2wFuWWRgm0DaRhdlHISUH-x5Q";
+const licenses = ["Microsoft 365 E3", "Microsoft 365 E5", "Teams Essentials"];
+const refreshIntervalMs = 3000;
+let currentRing = null;
+let refreshTimer = null;
 
 const ringScenarios = {
   "Ring 0": { label: "Pilot", tone: "pilot" },
@@ -546,10 +570,6 @@ async function loadAccountsFromSupabase() {
     }
 
     const accounts = await response.json();
-
-    if (accounts.length === 0) {
-      return 0;
-    }
 
     groupAccounts(accounts);
     saveAccounts();
@@ -665,6 +685,37 @@ function escapeAttribute(value) {
     .replaceAll(">", "&gt;");
 }
 
+function getLicenseOptions(selectedLicense) {
+  return licenses.map(license => `
+    <option ${license === selectedLicense ? "selected" : ""}>${escapeAttribute(license)}</option>
+  `).join("");
+}
+
+function isAccountTableFocused() {
+  const activeElement = document.activeElement;
+  return Boolean(activeElement && activeElement.closest && activeElement.closest("#accountTable"));
+}
+
+function refreshVisiblePage() {
+  loadMainPage();
+
+  if (currentRing && document.getElementById("accountPage").style.display !== "none") {
+    renderAccounts(currentRing);
+  }
+}
+
+async function refreshAccountsFromSupabase(forceRefresh = false) {
+  if (!forceRefresh && isAccountTableFocused()) {
+    return;
+  }
+
+  const loadedCount = await loadAccountsFromSupabase();
+
+  if (loadedCount !== null) {
+    refreshVisiblePage();
+  }
+}
+
 function loadMainPage() {
   const container = document.getElementById("mainPage");
   container.innerHTML = `
@@ -710,6 +761,7 @@ function loadMainPage() {
 }
 
 function openRing(ring) {
+  currentRing = ring;
   document.getElementById("mainPage").style.display = "none";
   const page = document.getElementById("accountPage");
   page.style.display = "block";
@@ -735,7 +787,9 @@ function renderAccounts(ring) {
           <thead>
             <tr>
               <th>Username</th>
+              <th>Email</th>
               <th>Password</th>
+              <th>License</th>
               <th class="actions-col">Action</th>
             </tr>
           </thead>
@@ -743,12 +797,23 @@ function renderAccounts(ring) {
             ${accountsData[ring].map((acc, i) => `
               <tr>
                 <td><input value="${escapeAttribute(acc.username)}" oninput="updateField('${ring}', ${i}, 'username', this.value)" /></td>
+                <td><input value="${escapeAttribute(acc.email)}" oninput="updateField('${ring}', ${i}, 'email', this.value)" /></td>
                 <td><input value="${escapeAttribute(acc.password)}" oninput="updateField('${ring}', ${i}, 'password', this.value)" /></td>
-                <td><button class="delete-btn" onclick="deleteAccount('${ring}', ${i})">Delete</button></td>
+                <td>
+                  <select onchange="updateField('${ring}', ${i}, 'license', this.value)">
+                    ${getLicenseOptions(acc.license)}
+                  </select>
+                </td>
+                <td>
+                  <div class="row-actions">
+                    <button class="update-btn" onclick="updateAccountRow('${ring}', ${i})">Update</button>
+                    <button class="delete-btn" onclick="deleteAccount('${ring}', ${i})">Delete</button>
+                  </div>
+                </td>
               </tr>
             `).join("") || `
               <tr>
-                <td class="empty-row" colspan="3">No accounts added yet.</td>
+                <td class="empty-row" colspan="5">No accounts added yet.</td>
               </tr>
             `}
           </tbody>
@@ -782,9 +847,7 @@ function renderAccounts(ring) {
         <div>
           <label>License</label>
           <select id="license">
-            <option>Microsoft 365 E3</option>
-            <option>Microsoft 365 E5</option>
-            <option>Teams Essentials</option>
+            ${getLicenseOptions("Microsoft 365 E3")}
           </select>
         </div>
       </div>
@@ -796,32 +859,35 @@ function renderAccounts(ring) {
   `;
 }
 
-async function updateField(ring, index, field, value) {
+function updateField(ring, index, field, value) {
   accountsData[ring][index][field] = value;
   saveAccounts();
+}
 
+async function updateAccountRow(ring, index) {
   try {
     await updateAccountInSupabase(accountsData[ring][index]);
+    await refreshAccountsFromSupabase(true);
+    alert("Account updated for all users.");
   } catch (e) {
     console.warn("Could not update account in Supabase:", e);
+    alert("Update failed. Please check Supabase table permissions.");
   }
 }
 
 async function addAccount(ring) {
-  const account = { ring, username: "", email: "", password: "", license: "" };
+  const account = { ring, username: "", email: "", password: "", license: "Microsoft 365 E3" };
 
   try {
     const insertedAccount = await insertAccount(account);
     accountsData[ring].push(insertedAccount);
   } catch (e) {
     console.warn("Could not add account to Supabase:", e);
-    accountsData[ring].push(account);
-    alert("Saved in this browser only. Please check Supabase table permissions.");
+    alert("Add failed. Please check Supabase table permissions.");
   }
 
   saveAccounts();
-  loadMainPage();
-  renderAccounts(ring);
+  refreshVisiblePage();
 }
 
 async function deleteAccount(ring, index) {
@@ -833,6 +899,7 @@ async function deleteAccount(ring, index) {
 
   try {
     await deleteAccountFromSupabase(account);
+    await refreshAccountsFromSupabase(true);
   } catch (e) {
     console.warn("Could not delete account from Supabase:", e);
     alert("Deleted locally, but Supabase delete failed. Please check table permissions.");
@@ -859,20 +926,16 @@ async function createTeamsAccount(ring) {
     const insertedAccount = await insertAccount(payload);
     accountsData[ring].push(insertedAccount);
     saveAccounts();
-    loadMainPage();
-    renderAccounts(ring);
+    refreshVisiblePage();
     alert("Account saved to Supabase!");
   } catch (e) {
     console.warn("Could not save account to Supabase:", e);
-    accountsData[ring].push(payload);
-    saveAccounts();
-    loadMainPage();
-    renderAccounts(ring);
-    alert("Saved in this browser only. Please check Supabase table permissions.");
+    alert("Save failed. Please check Supabase table permissions.");
   }
 }
 
 function goBack() {
+  currentRing = null;
   document.getElementById("mainPage").style.display = "block";
   document.getElementById("accountPage").style.display = "none";
   loadMainPage();
@@ -895,6 +958,8 @@ async function initApp() {
   if (loadedFromSupabase > 0 || (loadedFromSupabase === 0 && !loadedFromLocalStorage)) {
     loadMainPage();
   }
+
+  refreshTimer = setInterval(refreshAccountsFromSupabase, refreshIntervalMs);
 }
 
 initApp();
