@@ -527,6 +527,10 @@ function groupAccounts(accounts) {
   });
 }
 
+function hasAnyAccounts() {
+  return rings.some(r => accountsData[r].length > 0);
+}
+
 async function loadAccountsFromSupabase() {
   try {
     const response = await fetch(`${supabaseAccountsUrl}?select=id,ring,username,email,password,license&order=created_at.asc`, {
@@ -538,12 +542,17 @@ async function loadAccountsFromSupabase() {
     }
 
     const accounts = await response.json();
+
+    if (accounts.length === 0) {
+      return 0;
+    }
+
     groupAccounts(accounts);
     saveAccounts();
-    return true;
+    return accounts.length;
   } catch (e) {
     console.warn("Could not load accounts from Supabase:", e);
-    return false;
+    return null;
   }
 }
 
@@ -551,7 +560,7 @@ function loadSavedAccounts() {
   const savedAccounts = localStorage.getItem(storageKey);
 
   if (!savedAccounts) {
-    return;
+    return false;
   }
 
   try {
@@ -560,8 +569,11 @@ function loadSavedAccounts() {
     rings.forEach(r => {
       accountsData[r] = Array.isArray(parsedAccounts[r]) ? parsedAccounts[r] : [];
     });
+
+    return hasAnyAccounts();
   } catch (e) {
     console.warn("Could not load saved accounts:", e);
+    return false;
   }
 }
 
@@ -586,6 +598,9 @@ async function insertAccount(account) {
 
 async function updateAccountInSupabase(account) {
   if (!account.id) {
+    const insertedAccount = await insertAccount(account);
+    Object.assign(account, insertedAccount);
+    saveAccounts();
     return;
   }
 
@@ -783,6 +798,7 @@ async function addAccount(ring) {
   }
 
   saveAccounts();
+  loadMainPage();
   renderAccounts(ring);
 }
 
@@ -790,6 +806,7 @@ async function deleteAccount(ring, index) {
   const account = accountsData[ring][index];
   accountsData[ring].splice(index, 1);
   saveAccounts();
+  loadMainPage();
   renderAccounts(ring);
 
   try {
@@ -820,11 +837,16 @@ async function createTeamsAccount(ring) {
     const insertedAccount = await insertAccount(payload);
     accountsData[ring].push(insertedAccount);
     saveAccounts();
+    loadMainPage();
     renderAccounts(ring);
     alert("Account saved to Supabase!");
   } catch (e) {
     console.warn("Could not save account to Supabase:", e);
-    alert("Error saving to Supabase. Please check table permissions.");
+    accountsData[ring].push(payload);
+    saveAccounts();
+    loadMainPage();
+    renderAccounts(ring);
+    alert("Saved in this browser only. Please check Supabase table permissions.");
   }
 }
 
@@ -835,13 +857,13 @@ function goBack() {
 }
 
 async function initApp() {
+  const loadedFromLocalStorage = loadSavedAccounts();
+  loadMainPage();
   const loadedFromSupabase = await loadAccountsFromSupabase();
 
-  if (!loadedFromSupabase) {
-    loadSavedAccounts();
+  if (loadedFromSupabase > 0 || (loadedFromSupabase === 0 && !loadedFromLocalStorage)) {
+    loadMainPage();
   }
-
-  loadMainPage();
 }
 
 initApp();
