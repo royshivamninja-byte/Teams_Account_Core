@@ -531,6 +531,10 @@ function hasAnyAccounts() {
   return rings.some(r => accountsData[r].length > 0);
 }
 
+function getAllAccounts() {
+  return rings.flatMap(r => accountsData[r].map(account => ({ ...account, ring: account.ring || r })));
+}
+
 async function loadAccountsFromSupabase() {
   try {
     const response = await fetch(`${supabaseAccountsUrl}?select=id,ring,username,email,password,license&order=created_at.asc`, {
@@ -553,6 +557,24 @@ async function loadAccountsFromSupabase() {
   } catch (e) {
     console.warn("Could not load accounts from Supabase:", e);
     return null;
+  }
+}
+
+async function syncLocalAccountsToSupabase() {
+  const localOnlyAccounts = getAllAccounts().filter(account => !account.id);
+
+  for (const account of localOnlyAccounts) {
+    if (!account.username && !account.email && !account.password && !account.license) {
+      continue;
+    }
+
+    await insertAccount({
+      ring: account.ring,
+      username: account.username || "",
+      email: account.email || "",
+      password: account.password || "",
+      license: account.license || ""
+    });
   }
 }
 
@@ -859,6 +881,15 @@ function goBack() {
 async function initApp() {
   const loadedFromLocalStorage = loadSavedAccounts();
   loadMainPage();
+
+  if (loadedFromLocalStorage) {
+    try {
+      await syncLocalAccountsToSupabase();
+    } catch (e) {
+      console.warn("Could not sync local accounts to Supabase:", e);
+    }
+  }
+
   const loadedFromSupabase = await loadAccountsFromSupabase();
 
   if (loadedFromSupabase > 0 || (loadedFromSupabase === 0 && !loadedFromLocalStorage)) {
