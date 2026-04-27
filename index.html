@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#1d4ed8">
+<link rel="manifest" href="manifest.webmanifest">
 <title>Teams Core Account</title>
 
 <style>
@@ -321,7 +323,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   background: white;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -335,9 +338,15 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: var(--brand);
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.14);
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 
 .form-grid {
@@ -444,6 +453,30 @@ button:active {
   margin: 24px 0;
 }
 
+.section-stack {
+  display: grid;
+  gap: 22px;
+}
+
+.panel-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.app-badge {
+  background: rgba(191, 219, 254, 0.14);
+  border: 1px solid rgba(191, 219, 254, 0.28);
+  border-radius: 999px;
+  color: #dbeafe;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 7px 12px;
+}
+
 @media (max-width: 680px) {
   .header h1 {
     font-size: 28px;
@@ -477,6 +510,7 @@ button:active {
     <p class="eyebrow">Account Management</p>
     <h1>Teams Core Account</h1>
     <p>Choose a ring, manage credentials, and create account requests from one clean workspace.</p>
+    <div class="app-badge">Android-ready PWA | Install from Chrome menu on Android</div>
   </div>
 </div>
 
@@ -488,13 +522,17 @@ button:active {
 const rings = ["Ring 0", "Ring 1", "Ring 2", "Ring 4", "EDU", "GCCH", "DoD", "Gallatin", "Auth"];
 
 let accountsData = {};
+let devicesData = {};
 const storageKey = "teamsCoreAccountsData";
+const deviceStorageKey = "teamsCoreDevicesData";
 const supabaseAccountsUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/accounts";
+const supabaseDevicesUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/devices";
 const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZXV1dm9oYXNraGptYmxxZnFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MzYzNzUsImV4cCI6MjA5MjUxMjM3NX0.LnrZkxi7ajawWdQ_9k2wFuWWRgm0DaRhdlHISUH-x5Q";
 const licenses = ["Microsoft 365 E3", "Microsoft 365 E5", "Teams Essentials"];
 const refreshIntervalMs = 3000;
 let currentRing = null;
 let refreshTimer = null;
+let deviceSyncAvailable = true;
 
 const ringScenarios = {
   "Ring 0": { label: "Pilot", tone: "pilot" },
@@ -508,10 +546,17 @@ const ringScenarios = {
   Auth: { label: "Identity", tone: "auth" }
 };
 
-rings.forEach(r => accountsData[r] = []);
+rings.forEach(r => {
+  accountsData[r] = [];
+  devicesData[r] = [];
+});
 
 function resetAccountsData() {
   rings.forEach(r => accountsData[r] = []);
+}
+
+function resetDevicesData() {
+  rings.forEach(r => devicesData[r] = []);
 }
 
 function getSupabaseHeaders(prefer) {
@@ -553,6 +598,10 @@ function groupAccounts(accounts) {
 
 function hasAnyAccounts() {
   return rings.some(r => accountsData[r].length > 0);
+}
+
+function hasAnyDevices() {
+  return rings.some(r => devicesData[r].length > 0);
 }
 
 function getAllAccounts() {
@@ -623,6 +672,178 @@ function saveAccounts() {
   localStorage.setItem(storageKey, JSON.stringify(accountsData));
 }
 
+function normalizeDevice(device) {
+  return {
+    id: device.id || null,
+    deviceName: device.deviceName || "",
+    platform: device.platform || "",
+    osVersion: device.osVersion || "",
+    serialNumber: device.serialNumber || "",
+    assetsReceived: device.assetsReceived || ""
+  };
+}
+
+function loadSavedDevices() {
+  const savedDevices = localStorage.getItem(deviceStorageKey);
+
+  if (!savedDevices) {
+    return false;
+  }
+
+  try {
+    const parsedDevices = JSON.parse(savedDevices);
+
+    rings.forEach(r => {
+      devicesData[r] = Array.isArray(parsedDevices[r])
+        ? parsedDevices[r].map(normalizeDevice)
+        : [];
+    });
+
+    return hasAnyDevices();
+  } catch (e) {
+    console.warn("Could not load saved devices:", e);
+    return false;
+  }
+}
+
+function saveDevices() {
+  localStorage.setItem(deviceStorageKey, JSON.stringify(devicesData));
+}
+
+function getAllDevices() {
+  return rings.flatMap(r => devicesData[r].map(device => ({ ...device, ring: r })));
+}
+
+async function loadDevicesFromSupabase() {
+  try {
+    const response = await fetch(`${supabaseDevicesUrl}?select=id,ring,deviceName,platform,osVersion,serialNumber,assetsReceived&order=created_at.asc`, {
+      headers: getSupabaseHeaders()
+    });
+
+    if (response.status === 404) {
+      deviceSyncAvailable = false;
+      return null;
+    }
+
+    if (!response.ok) {
+      throw new Error(`Supabase device load failed: ${response.status}`);
+    }
+
+    const devices = await response.json();
+    resetDevicesData();
+
+    devices.forEach(device => {
+      const normalizedDevice = normalizeDevice(device);
+
+      if (rings.includes(device.ring || "")) {
+        devicesData[device.ring].push(normalizedDevice);
+      }
+    });
+
+    deviceSyncAvailable = true;
+    saveDevices();
+    return devices.length;
+  } catch (e) {
+    console.warn("Could not load devices from Supabase:", e);
+    return null;
+  }
+}
+
+async function insertDevice(device) {
+  const response = await fetch(supabaseDevicesUrl, {
+    method: "POST",
+    headers: getSupabaseHeaders("return=representation"),
+    body: JSON.stringify(device)
+  });
+
+  if (response.status === 404) {
+    deviceSyncAvailable = false;
+    throw new Error("Supabase devices table not found.");
+  }
+
+  if (!response.ok) {
+    throw new Error(`Supabase device insert failed: ${response.status}`);
+  }
+
+  const insertedDevices = await response.json();
+  deviceSyncAvailable = true;
+  return normalizeDevice(insertedDevices[0]);
+}
+
+async function updateDeviceInSupabase(device) {
+  if (!device.id) {
+    throw new Error("Device id missing.");
+  }
+
+  const response = await fetch(`${supabaseDevicesUrl}?id=eq.${device.id}`, {
+    method: "PATCH",
+    headers: getSupabaseHeaders(),
+    body: JSON.stringify({
+      deviceName: device.deviceName,
+      platform: device.platform,
+      osVersion: device.osVersion,
+      serialNumber: device.serialNumber,
+      assetsReceived: device.assetsReceived
+    })
+  });
+
+  if (response.status === 404) {
+    deviceSyncAvailable = false;
+    throw new Error("Supabase devices table not found.");
+  }
+
+  if (!response.ok) {
+    throw new Error(`Supabase device update failed: ${response.status}`);
+  }
+
+  deviceSyncAvailable = true;
+}
+
+async function deleteDeviceFromSupabase(device) {
+  if (!device.id) {
+    return;
+  }
+
+  const response = await fetch(`${supabaseDevicesUrl}?id=eq.${device.id}`, {
+    method: "DELETE",
+    headers: getSupabaseHeaders()
+  });
+
+  if (response.status === 404) {
+    deviceSyncAvailable = false;
+    throw new Error("Supabase devices table not found.");
+  }
+
+  if (!response.ok) {
+    throw new Error(`Supabase device delete failed: ${response.status}`);
+  }
+
+  deviceSyncAvailable = true;
+}
+
+async function syncLocalDevicesToSupabase() {
+  if (!deviceSyncAvailable) {
+    return;
+  }
+
+  const localOnlyDevices = getAllDevices().filter(device => !device.id || String(device.id).startsWith("local-"));
+
+  for (const device of localOnlyDevices) {
+    if (!device.deviceName && !device.platform && !device.osVersion && !device.serialNumber && !device.assetsReceived) {
+      continue;
+    }
+
+    await insertDevice({
+      ring: device.ring,
+      deviceName: device.deviceName || "",
+      platform: device.platform || "",
+      osVersion: device.osVersion || "",
+      serialNumber: device.serialNumber || "",
+      assetsReceived: device.assetsReceived || ""
+    });
+  }
+}
+
 async function insertAccount(account) {
   const response = await fetch(supabaseAccountsUrl, {
     method: "POST",
@@ -691,9 +912,13 @@ function getLicenseOptions(selectedLicense) {
   `).join("");
 }
 
-function isAccountTableFocused() {
+function isEditableTableFocused() {
   const activeElement = document.activeElement;
-  return Boolean(activeElement && activeElement.closest && activeElement.closest("#accountTable"));
+  return Boolean(
+    activeElement &&
+    activeElement.closest &&
+    (activeElement.closest("#accountTable") || activeElement.closest("#deviceTable"))
+  );
 }
 
 function refreshVisiblePage() {
@@ -705,13 +930,14 @@ function refreshVisiblePage() {
 }
 
 async function refreshAccountsFromSupabase(forceRefresh = false) {
-  if (!forceRefresh && isAccountTableFocused()) {
+  if (!forceRefresh && isEditableTableFocused()) {
     return;
   }
 
   const loadedCount = await loadAccountsFromSupabase();
+  const loadedDevices = await loadDevicesFromSupabase();
 
-  if (loadedCount !== null) {
+  if (loadedCount !== null || loadedDevices !== null) {
     refreshVisiblePage();
   }
 }
@@ -751,7 +977,7 @@ function loadMainPage() {
             <span>${r}</span>
           </div>
           <div class="ring-card-footer">
-            <span>${accountsData[r].length} accounts</span>
+            <span>${accountsData[r].length} accounts | ${devicesData[r].length} devices</span>
             <span class="scenario-badge">${ringScenarios[r].label}</span>
           </div>
         </div>
@@ -773,87 +999,185 @@ function renderAccounts(ring) {
   const page = document.getElementById("accountPage");
 
   page.innerHTML = `
-    <div class="panel">
-      <div class="toolbar">
-        <div>
-          <h2>${ring} Accounts</h2>
-          <p>Update saved credentials or submit a new Teams account request.</p>
+    <div class="section-stack">
+      <div class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>${ring} Workspace</h2>
+            <p>Manage Teams accounts and device handoff details in one Android-friendly view.</p>
+          </div>
+          <button class="back-btn" onclick="goBack()">&lt;- Back</button>
         </div>
-        <button class="back-btn" onclick="goBack()">&lt;- Back</button>
+
+        <div class="panel-note">Install this app on Android from Chrome using Add to Home screen for a full-screen experience.</div>
       </div>
 
-      <div class="table-wrap">
-        <table id="accountTable">
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Email</th>
-              <th>Password</th>
-              <th>License</th>
-              <th class="actions-col">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${accountsData[ring].map((acc, i) => `
+      <div class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>${ring} Accounts</h2>
+            <p>Update saved credentials or submit a new Teams account request.</p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="accountTable">
+            <thead>
               <tr>
-                <td><input value="${escapeAttribute(acc.username)}" oninput="updateField('${ring}', ${i}, 'username', this.value)" /></td>
-                <td><input value="${escapeAttribute(acc.email)}" oninput="updateField('${ring}', ${i}, 'email', this.value)" /></td>
-                <td><input value="${escapeAttribute(acc.password)}" oninput="updateField('${ring}', ${i}, 'password', this.value)" /></td>
-                <td>
-                  <select onchange="updateField('${ring}', ${i}, 'license', this.value)">
-                    ${getLicenseOptions(acc.license)}
-                  </select>
-                </td>
-                <td>
-                  <div class="row-actions">
-                    <button class="update-btn" onclick="updateAccountRow('${ring}', ${i})">Update</button>
-                    <button class="delete-btn" onclick="deleteAccount('${ring}', ${i})">Delete</button>
-                  </div>
-                </td>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Password</th>
+                <th>License</th>
+                <th class="actions-col">Action</th>
               </tr>
-            `).join("") || `
+            </thead>
+            <tbody>
+              ${accountsData[ring].map((acc, i) => `
+                <tr>
+                  <td><input value="${escapeAttribute(acc.username)}" oninput="updateField('${ring}', ${i}, 'username', this.value)" /></td>
+                  <td><input value="${escapeAttribute(acc.email)}" oninput="updateField('${ring}', ${i}, 'email', this.value)" /></td>
+                  <td><input value="${escapeAttribute(acc.password)}" oninput="updateField('${ring}', ${i}, 'password', this.value)" /></td>
+                  <td>
+                    <select onchange="updateField('${ring}', ${i}, 'license', this.value)">
+                      ${getLicenseOptions(acc.license)}
+                    </select>
+                  </td>
+                  <td>
+                    <div class="row-actions">
+                      <button class="update-btn" onclick="updateAccountRow('${ring}', ${i})">Update</button>
+                      <button class="delete-btn" onclick="deleteAccount('${ring}', ${i})">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join("") || `
+                <tr>
+                  <td class="empty-row" colspan="5">No accounts added yet.</td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="button-row">
+          <button class="secondary-btn" onclick="addAccount('${ring}')">+ Add Account</button>
+        </div>
+
+        <hr class="divider">
+
+        <h3>Create Teams Account</h3>
+
+        <div class="form-grid">
+          <div>
+            <label>Username</label>
+            <input id="newUsername">
+          </div>
+
+          <div>
+            <label>Email</label>
+            <input id="newEmail">
+          </div>
+
+          <div>
+            <label>Password</label>
+            <input id="newPassword" type="password">
+          </div>
+
+          <div>
+            <label>License</label>
+            <select id="license">
+              ${getLicenseOptions("Microsoft 365 E3")}
+            </select>
+          </div>
+        </div>
+
+        <div class="button-row">
+          <button onclick="createTeamsAccount('${ring}')">Create Account</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>${ring} Device Details</h2>
+            <p>Track the device handoff details each user can update from their Android-installed app.</p>
+            <p class="panel-note">${deviceSyncAvailable ? "Device details sync through Supabase when the devices table is available." : "Device details are currently stored only on this device until the Supabase devices table is created."}</p>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table id="deviceTable">
+            <thead>
               <tr>
-                <td class="empty-row" colspan="5">No accounts added yet.</td>
+                <th>Device Name</th>
+                <th>Platform</th>
+                <th>OS Version</th>
+                <th>Serial Number</th>
+                <th>Assets Received</th>
+                <th class="actions-col">Action</th>
               </tr>
-            `}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="button-row">
-        <button class="secondary-btn" onclick="addAccount('${ring}')">+ Add Account</button>
-      </div>
-
-      <hr class="divider">
-
-      <h3>Create Teams Account</h3>
-
-      <div class="form-grid">
-        <div>
-          <label>Username</label>
-          <input id="newUsername">
+            </thead>
+            <tbody>
+              ${devicesData[ring].map((device, i) => `
+                <tr>
+                  <td><input value="${escapeAttribute(device.deviceName)}" oninput="updateDeviceField('${ring}', ${i}, 'deviceName', this.value)" /></td>
+                  <td><input value="${escapeAttribute(device.platform)}" oninput="updateDeviceField('${ring}', ${i}, 'platform', this.value)" /></td>
+                  <td><input value="${escapeAttribute(device.osVersion)}" oninput="updateDeviceField('${ring}', ${i}, 'osVersion', this.value)" /></td>
+                  <td><input value="${escapeAttribute(device.serialNumber)}" oninput="updateDeviceField('${ring}', ${i}, 'serialNumber', this.value)" /></td>
+                  <td><textarea oninput="updateDeviceField('${ring}', ${i}, 'assetsReceived', this.value)">${escapeAttribute(device.assetsReceived)}</textarea></td>
+                  <td>
+                    <div class="row-actions">
+                      <button class="update-btn" onclick="saveDeviceRow('${ring}', ${i})">Update</button>
+                      <button class="delete-btn" onclick="deleteDevice('${ring}', ${i})">Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join("") || `
+                <tr>
+                  <td class="empty-row" colspan="6">No devices added yet.</td>
+                </tr>
+              `}
+            </tbody>
+          </table>
         </div>
 
-        <div>
-          <label>Email</label>
-          <input id="newEmail">
+        <div class="button-row">
+          <button class="secondary-btn" onclick="addDevice('${ring}')">+ Add Device</button>
         </div>
 
-        <div>
-          <label>Password</label>
-          <input id="newPassword" type="password">
+        <hr class="divider">
+
+        <h3>Add Device Details</h3>
+
+        <div class="form-grid">
+          <div>
+            <label>Device Name</label>
+            <input id="newDeviceName" placeholder="Galaxy S24, Pixel 8, Surface Duo">
+          </div>
+
+          <div>
+            <label>Platform</label>
+            <input id="newPlatform" placeholder="Android, iOS, Windows">
+          </div>
+
+          <div>
+            <label>OS Version</label>
+            <input id="newOsVersion" placeholder="Android 15">
+          </div>
+
+          <div>
+            <label>Serial Number</label>
+            <input id="newSerialNumber" placeholder="SN-123456789">
+          </div>
+
+          <div style="grid-column: 1 / -1;">
+            <label>Assets Received</label>
+            <textarea id="newAssetsReceived" placeholder="Charger, dock, SIM card, headset"></textarea>
+          </div>
         </div>
 
-        <div>
-          <label>License</label>
-          <select id="license">
-            ${getLicenseOptions("Microsoft 365 E3")}
-          </select>
+        <div class="button-row">
+          <button onclick="createDevice('${ring}')">Save Device Details</button>
         </div>
-      </div>
-
-      <div class="button-row">
-        <button onclick="createTeamsAccount('${ring}')">Create Account</button>
       </div>
     </div>
   `;
@@ -862,6 +1186,11 @@ function renderAccounts(ring) {
 function updateField(ring, index, field, value) {
   accountsData[ring][index][field] = value;
   saveAccounts();
+}
+
+function updateDeviceField(ring, index, field, value) {
+  devicesData[ring][index][field] = value;
+  saveDevices();
 }
 
 async function updateAccountRow(ring, index) {
@@ -934,6 +1263,110 @@ async function createTeamsAccount(ring) {
   }
 }
 
+function addDevice(ring) {
+  devicesData[ring].push(normalizeDevice({
+    id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+  }));
+  saveDevices();
+  refreshVisiblePage();
+}
+
+async function saveDeviceRow(ring, index) {
+  const device = devicesData[ring][index];
+  saveDevices();
+
+  if (!deviceSyncAvailable) {
+    loadMainPage();
+    renderAccounts(ring);
+    alert("Device details updated locally. Create the Supabase devices table to sync them for all users.");
+    return;
+  }
+
+  try {
+    if (!device.id || String(device.id).startsWith("local-")) {
+      const insertedDevice = await insertDevice({
+        ring,
+        deviceName: device.deviceName,
+        platform: device.platform,
+        osVersion: device.osVersion,
+        serialNumber: device.serialNumber,
+        assetsReceived: device.assetsReceived
+      });
+
+      devicesData[ring][index] = insertedDevice;
+      saveDevices();
+    } else {
+      await updateDeviceInSupabase(device);
+    }
+
+    await loadDevicesFromSupabase();
+    loadMainPage();
+    renderAccounts(ring);
+    alert("Device details updated for all users.");
+  } catch (e) {
+    console.warn("Could not update device in Supabase:", e);
+    loadMainPage();
+    renderAccounts(ring);
+    alert("Device update saved locally, but Supabase sync is not ready yet.");
+  }
+}
+
+function deleteDevice(ring, index) {
+  const device = devicesData[ring][index];
+  devicesData[ring].splice(index, 1);
+  saveDevices();
+  loadMainPage();
+  renderAccounts(ring);
+
+  if (!deviceSyncAvailable) {
+    return;
+  }
+
+  deleteDeviceFromSupabase(device).catch(e => {
+    console.warn("Could not delete device from Supabase:", e);
+    alert("Device deleted locally, but Supabase delete failed.");
+  });
+}
+
+async function createDevice(ring) {
+  const payload = {
+    ring,
+    deviceName: document.getElementById("newDeviceName").value,
+    platform: document.getElementById("newPlatform").value,
+    osVersion: document.getElementById("newOsVersion").value,
+    serialNumber: document.getElementById("newSerialNumber").value,
+    assetsReceived: document.getElementById("newAssetsReceived").value
+  };
+
+  if (!deviceSyncAvailable) {
+    devicesData[ring].push(normalizeDevice({
+      ...payload,
+      id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+    }));
+    saveDevices();
+    refreshVisiblePage();
+    alert("Device details saved locally. Create the Supabase devices table to sync them for all users.");
+    return;
+  }
+
+  try {
+    const insertedDevice = await insertDevice(payload);
+    devicesData[ring].push(insertedDevice);
+    saveDevices();
+    refreshVisiblePage();
+    alert("Device details saved to Supabase!");
+  } catch (e) {
+    console.warn("Could not save device to Supabase:", e);
+    devicesData[ring].push(normalizeDevice({
+      ...payload,
+      id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+    }));
+    saveDevices();
+    refreshVisiblePage();
+    alert("Device details saved locally, but Supabase sync is not ready yet.");
+  }
+}
+
 function goBack() {
   currentRing = null;
   document.getElementById("mainPage").style.display = "block";
@@ -943,6 +1376,7 @@ function goBack() {
 
 async function initApp() {
   const loadedFromLocalStorage = loadSavedAccounts();
+  const loadedDevicesFromLocalStorage = loadSavedDevices();
   loadMainPage();
 
   if (loadedFromLocalStorage) {
@@ -954,12 +1388,34 @@ async function initApp() {
   }
 
   const loadedFromSupabase = await loadAccountsFromSupabase();
+  const loadedDevicesFromSupabase = await loadDevicesFromSupabase();
 
-  if (loadedFromSupabase > 0 || (loadedFromSupabase === 0 && !loadedFromLocalStorage)) {
+  if (loadedDevicesFromLocalStorage) {
+    try {
+      await syncLocalDevicesToSupabase();
+      await loadDevicesFromSupabase();
+    } catch (e) {
+      console.warn("Could not sync local devices to Supabase:", e);
+    }
+  }
+
+  if (
+    loadedFromSupabase > 0 ||
+    loadedDevicesFromSupabase > 0 ||
+    ((loadedFromSupabase === 0 || loadedDevicesFromSupabase === 0) && !loadedFromLocalStorage && !loadedDevicesFromLocalStorage)
+  ) {
     loadMainPage();
   }
 
   refreshTimer = setInterval(refreshAccountsFromSupabase, refreshIntervalMs);
+}
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./service-worker.js").catch(error => {
+      console.warn("Service worker registration failed:", error);
+    });
+  });
 }
 
 initApp();
