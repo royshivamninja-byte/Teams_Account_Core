@@ -518,6 +518,8 @@ button:active {
 
 <div class="container" id="accountPage" style="display:none;"></div>
 
+<div class="container" id="devicePage" style="display:none;"></div>
+
 <script>
 const rings = ["Ring 0", "Ring 1", "Ring 2", "Ring 4", "EDU", "GCCH", "DoD", "Gallatin", "Auth"];
 
@@ -533,6 +535,7 @@ const refreshIntervalMs = 3000;
 let currentRing = null;
 let refreshTimer = null;
 let deviceSyncAvailable = true;
+let currentView = "main";
 
 const ringScenarios = {
   "Ring 0": { label: "Pilot", tone: "pilot" },
@@ -712,6 +715,10 @@ function saveDevices() {
 
 function getAllDevices() {
   return rings.flatMap(r => devicesData[r].map(device => ({ ...device, ring: r })));
+}
+
+function getAllDevicesWithIndex() {
+  return rings.flatMap(r => devicesData[r].map((device, index) => ({ ...device, ring: r, index })));
 }
 
 async function loadDevicesFromSupabase() {
@@ -924,8 +931,12 @@ function isEditableTableFocused() {
 function refreshVisiblePage() {
   loadMainPage();
 
-  if (currentRing && document.getElementById("accountPage").style.display !== "none") {
+  if (currentView === "accounts" && currentRing && document.getElementById("accountPage").style.display !== "none") {
     renderAccounts(currentRing);
+  }
+
+  if (currentView === "devices" && document.getElementById("devicePage").style.display !== "none") {
+    renderDevicesPage();
   }
 }
 
@@ -945,6 +956,17 @@ async function refreshAccountsFromSupabase(forceRefresh = false) {
 function loadMainPage() {
   const container = document.getElementById("mainPage");
   container.innerHTML = `
+    <div class="panel" style="margin-bottom: 22px;">
+      <div class="toolbar">
+        <div>
+          <h2>Workspace Sections</h2>
+          <p>Open ring-based account management or go straight to the shared device-details page.</p>
+        </div>
+        <button class="secondary-btn" onclick="openDevicesPage()">Device Details</button>
+      </div>
+      <div class="panel-note">${getAllDevices().length} devices tracked across all sections.</div>
+    </div>
+
     <div class="section-title">
       <div>
         <h2>Select a ring</h2>
@@ -977,7 +999,7 @@ function loadMainPage() {
             <span>${r}</span>
           </div>
           <div class="ring-card-footer">
-            <span>${accountsData[r].length} accounts | ${devicesData[r].length} devices</span>
+            <span>${accountsData[r].length} accounts</span>
             <span class="scenario-badge">${ringScenarios[r].label}</span>
           </div>
         </div>
@@ -988,11 +1010,22 @@ function loadMainPage() {
 
 function openRing(ring) {
   currentRing = ring;
+  currentView = "accounts";
   document.getElementById("mainPage").style.display = "none";
+  document.getElementById("devicePage").style.display = "none";
   const page = document.getElementById("accountPage");
   page.style.display = "block";
 
   renderAccounts(ring);
+}
+
+function openDevicesPage() {
+  currentView = "devices";
+  currentRing = null;
+  document.getElementById("mainPage").style.display = "none";
+  document.getElementById("accountPage").style.display = "none";
+  document.getElementById("devicePage").style.display = "block";
+  renderDevicesPage();
 }
 
 function renderAccounts(ring) {
@@ -1003,10 +1036,10 @@ function renderAccounts(ring) {
       <div class="panel">
         <div class="toolbar">
           <div>
-            <h2>${ring} Workspace</h2>
-            <p>Manage Teams accounts and device handoff details in one Android-friendly view.</p>
+            <h2>${ring} Accounts</h2>
+            <p>Manage Teams account credentials in this ring workspace.</p>
           </div>
-          <button class="back-btn" onclick="goBack()">&lt;- Back</button>
+          <button class="back-btn" onclick="goHome()">&lt;- Back</button>
         </div>
 
         <div class="panel-note">Install this app on Android from Chrome using Add to Home screen for a full-screen experience.</div>
@@ -1094,13 +1127,32 @@ function renderAccounts(ring) {
           <button onclick="createTeamsAccount('${ring}')">Create Account</button>
         </div>
       </div>
+    </div>
+  `;
+}
+
+function renderDevicesPage() {
+  const page = document.getElementById("devicePage");
+  const devices = getAllDevicesWithIndex();
+
+  page.innerHTML = `
+    <div class="section-stack">
+      <div class="panel">
+        <div class="toolbar">
+          <div>
+            <h2>Device Details</h2>
+            <p>Manage shared device inventory in a dedicated page, separate from ring-based account management.</p>
+            <p class="panel-note">${deviceSyncAvailable ? "Device details sync through Supabase when the devices table is available." : "Device details are currently stored only on this device until the Supabase devices table is created."}</p>
+          </div>
+          <button class="back-btn" onclick="goHome()">&lt;- Back</button>
+        </div>
+      </div>
 
       <div class="panel">
         <div class="toolbar">
           <div>
-            <h2>${ring} Device Details</h2>
-            <p>Track the device handoff details each user can update from their Android-installed app.</p>
-            <p class="panel-note">${deviceSyncAvailable ? "Device details sync through Supabase when the devices table is available." : "Device details are currently stored only on this device until the Supabase devices table is created."}</p>
+            <h2>All Devices</h2>
+            <p>Track device name, platform, OS version, serial number, and assets received.</p>
           </div>
         </div>
 
@@ -1117,17 +1169,17 @@ function renderAccounts(ring) {
               </tr>
             </thead>
             <tbody>
-              ${devicesData[ring].map((device, i) => `
+              ${devices.map(device => `
                 <tr>
-                  <td><input value="${escapeAttribute(device.deviceName)}" oninput="updateDeviceField('${ring}', ${i}, 'deviceName', this.value)" /></td>
-                  <td><input value="${escapeAttribute(device.platform)}" oninput="updateDeviceField('${ring}', ${i}, 'platform', this.value)" /></td>
-                  <td><input value="${escapeAttribute(device.osVersion)}" oninput="updateDeviceField('${ring}', ${i}, 'osVersion', this.value)" /></td>
-                  <td><input value="${escapeAttribute(device.serialNumber)}" oninput="updateDeviceField('${ring}', ${i}, 'serialNumber', this.value)" /></td>
-                  <td><textarea oninput="updateDeviceField('${ring}', ${i}, 'assetsReceived', this.value)">${escapeAttribute(device.assetsReceived)}</textarea></td>
+                  <td><input value="${escapeAttribute(device.deviceName)}" oninput="updateDeviceField('${device.ring}', ${device.index}, 'deviceName', this.value)" /></td>
+                  <td><input value="${escapeAttribute(device.platform)}" oninput="updateDeviceField('${device.ring}', ${device.index}, 'platform', this.value)" /></td>
+                  <td><input value="${escapeAttribute(device.osVersion)}" oninput="updateDeviceField('${device.ring}', ${device.index}, 'osVersion', this.value)" /></td>
+                  <td><input value="${escapeAttribute(device.serialNumber)}" oninput="updateDeviceField('${device.ring}', ${device.index}, 'serialNumber', this.value)" /></td>
+                  <td><textarea oninput="updateDeviceField('${device.ring}', ${device.index}, 'assetsReceived', this.value)">${escapeAttribute(device.assetsReceived)}</textarea></td>
                   <td>
                     <div class="row-actions">
-                      <button class="update-btn" onclick="saveDeviceRow('${ring}', ${i})">Update</button>
-                      <button class="delete-btn" onclick="deleteDevice('${ring}', ${i})">Delete</button>
+                      <button class="update-btn" onclick="saveDeviceRow('${device.ring}', ${device.index})">Update</button>
+                      <button class="delete-btn" onclick="deleteDevice('${device.ring}', ${device.index})">Delete</button>
                     </div>
                   </td>
                 </tr>
@@ -1141,7 +1193,7 @@ function renderAccounts(ring) {
         </div>
 
         <div class="button-row">
-          <button class="secondary-btn" onclick="addDevice('${ring}')">+ Add Device</button>
+          <button class="secondary-btn" onclick="addDevice(document.getElementById('deviceRing').value)">+ Add Device Row</button>
         </div>
 
         <hr class="divider">
@@ -1149,6 +1201,13 @@ function renderAccounts(ring) {
         <h3>Add Device Details</h3>
 
         <div class="form-grid">
+          <div>
+            <label>Ring</label>
+            <select id="deviceRing">
+              ${rings.map(ring => `<option value="${escapeAttribute(ring)}">${ring}</option>`).join("")}
+            </select>
+          </div>
+
           <div>
             <label>Device Name</label>
             <input id="newDeviceName" placeholder="Galaxy S24, Pixel 8, Surface Duo">
@@ -1176,7 +1235,7 @@ function renderAccounts(ring) {
         </div>
 
         <div class="button-row">
-          <button onclick="createDevice('${ring}')">Save Device Details</button>
+          <button onclick="createDevice(document.getElementById('deviceRing').value)">Save Device Details</button>
         </div>
       </div>
     </div>
@@ -1276,8 +1335,7 @@ async function saveDeviceRow(ring, index) {
   saveDevices();
 
   if (!deviceSyncAvailable) {
-    loadMainPage();
-    renderAccounts(ring);
+    refreshVisiblePage();
     alert("Device details updated locally. Create the Supabase devices table to sync them for all users.");
     return;
   }
@@ -1300,13 +1358,11 @@ async function saveDeviceRow(ring, index) {
     }
 
     await loadDevicesFromSupabase();
-    loadMainPage();
-    renderAccounts(ring);
+    refreshVisiblePage();
     alert("Device details updated for all users.");
   } catch (e) {
     console.warn("Could not update device in Supabase:", e);
-    loadMainPage();
-    renderAccounts(ring);
+    refreshVisiblePage();
     alert("Device update saved locally, but Supabase sync is not ready yet.");
   }
 }
@@ -1315,8 +1371,7 @@ function deleteDevice(ring, index) {
   const device = devicesData[ring][index];
   devicesData[ring].splice(index, 1);
   saveDevices();
-  loadMainPage();
-  renderAccounts(ring);
+  refreshVisiblePage();
 
   if (!deviceSyncAvailable) {
     return;
@@ -1368,9 +1423,15 @@ async function createDevice(ring) {
 }
 
 function goBack() {
+  goHome();
+}
+
+function goHome() {
+  currentView = "main";
   currentRing = null;
   document.getElementById("mainPage").style.display = "block";
   document.getElementById("accountPage").style.display = "none";
+  document.getElementById("devicePage").style.display = "none";
   loadMainPage();
 }
 
