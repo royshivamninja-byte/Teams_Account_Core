@@ -607,7 +607,6 @@ button:active {
 
 <div class="container" id="devicePage" style="display:none;"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const rings = ["Ring 0", "Ring 1", "Ring 2", "Ring 4", "EDU", "GCCH", "DoD", "Gallatin", "Auth"];
 
@@ -615,21 +614,18 @@ let accountsData = {};
 let devicesData = {};
 const storageKey = "teamsCoreAccountsData";
 const deviceStorageKey = "teamsCoreDevicesData";
-const supabaseUrl = "https://iseuuvohaskhjmblqfqr.supabase.co";
 const supabaseAccountsUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/accounts";
 const supabaseDevicesUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/devices";
 const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZXV1dm9oYXNraGptYmxxZnFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MzYzNzUsImV4cCI6MjA5MjUxMjM3NX0.LnrZkxi7ajawWdQ_9k2wFuWWRgm0DaRhdlHISUH-x5Q";
-const supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
 const licenses = ["Microsoft 365 E3", "Microsoft 365 E5", "Teams Essentials"];
 const refreshIntervalMs = 3000;
+const adminUsername = "admin";
+const adminPassword = "08@Apples!";
 let currentRing = null;
 let refreshTimer = null;
 let deviceSyncAvailable = true;
 let currentView = "main";
 let currentSession = null;
-let authMode = "email";
-let pendingOtpTarget = "";
-let pendingOtpType = "";
 let appInitialized = false;
 
 const ringScenarios = {
@@ -1021,7 +1017,7 @@ function updateHeaderAuthUI() {
   }
 
   if (currentSession && currentSession.user) {
-    const userLabel = currentSession.user.email || currentSession.user.phone || "Signed in";
+    const userLabel = currentSession.user.username || "Signed in";
     userBadge.textContent = userLabel;
     userBadge.style.display = "inline-flex";
     deviceNavButton.style.display = "inline-flex";
@@ -1034,13 +1030,6 @@ function updateHeaderAuthUI() {
   }
 }
 
-function setAuthMode(mode) {
-  authMode = mode;
-  pendingOtpTarget = "";
-  pendingOtpType = "";
-  renderAuthPage("");
-}
-
 function renderAuthPage(statusMessage = "") {
   const authPage = document.getElementById("authPage");
   authPage.style.display = "block";
@@ -1049,40 +1038,28 @@ function renderAuthPage(statusMessage = "") {
       <div class="panel auth-card">
         <div class="toolbar">
           <div>
-            <h2>Secure Login</h2>
-            <p>Use a one-time password by email or phone to access the Teams Core workspace.</p>
+            <h2>Admin Sign In</h2>
+            <p>Enter the username and password to access the Teams Core workspace.</p>
           </div>
-        </div>
-
-        <div class="auth-toggle">
-          <button class="${authMode === "email" ? "auth-active" : "ghost-btn"}" onclick="setAuthMode('email')">Email OTP</button>
-          <button class="${authMode === "phone" ? "auth-active" : "ghost-btn"}" onclick="setAuthMode('phone')">Phone OTP</button>
         </div>
 
         <div class="form-grid">
           <div style="grid-column: 1 / -1;">
-            <label>${authMode === "email" ? "Work Email" : "Phone Number"}</label>
-            <input
-              id="authTarget"
-              type="${authMode === "email" ? "email" : "tel"}"
-              placeholder="${authMode === "email" ? "name@company.com" : "+919876543210"}"
-            >
+            <label>Username</label>
+            <input id="authUsername" value="admin" placeholder="admin">
           </div>
 
           <div style="grid-column: 1 / -1;">
-            <label>OTP Code</label>
-            <input id="authOtpCode" inputmode="numeric" placeholder="Enter the code you received">
+            <label>Password</label>
+            <input id="authPassword" type="password" placeholder="Enter your password">
           </div>
         </div>
 
         <div class="button-row">
-          <button class="secondary-btn" onclick="sendOtpCode()">Send OTP</button>
-          <button onclick="verifyOtpCode()">Verify OTP</button>
+          <button onclick="signInWithPassword()">Sign In</button>
         </div>
 
-        <div class="auth-status">${escapeAttribute(statusMessage || (authMode === "phone"
-          ? "Phone OTP requires Supabase Phone Auth with an SMS provider configured."
-          : "Email OTP requires the Supabase email template to send a token code."))}</div>
+        <div class="auth-status">${escapeAttribute(statusMessage || "Use the admin credentials to continue.")}</div>
       </div>
     </div>
   `;
@@ -1095,93 +1072,29 @@ function hideAllPages() {
   document.getElementById("devicePage").style.display = "none";
 }
 
-async function sendOtpCode() {
-  const targetInput = document.getElementById("authTarget");
-  const target = targetInput ? targetInput.value.trim() : "";
+function signInWithPassword() {
+  const usernameInput = document.getElementById("authUsername");
+  const passwordInput = document.getElementById("authPassword");
+  const username = usernameInput ? usernameInput.value.trim() : "";
+  const password = passwordInput ? passwordInput.value : "";
 
-  if (!target) {
-    renderAuthPage(`Enter your ${authMode === "email" ? "email" : "phone number"} first.`);
+  if (username !== adminUsername || password !== adminPassword) {
+    renderAuthPage("Invalid username or password.");
+    const refreshedUsernameInput = document.getElementById("authUsername");
+    if (refreshedUsernameInput) {
+      refreshedUsernameInput.value = username || adminUsername;
+    }
     return;
   }
 
-  try {
-    if (authMode === "email") {
-      const { error } = await supabaseClient.auth.signInWithOtp({
-        email: target,
-        options: { shouldCreateUser: true }
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      pendingOtpTarget = target;
-      pendingOtpType = "email";
-      renderAuthPage(`OTP sent to ${target}. Check your inbox for the code.`);
-    } else {
-      const { error } = await supabaseClient.auth.signInWithOtp({
-        phone: target
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      pendingOtpTarget = target;
-      pendingOtpType = "sms";
-      renderAuthPage(`OTP sent to ${target}. Check your SMS messages for the code.`);
-    }
-  } catch (e) {
-    console.warn("Could not send OTP:", e);
-    renderAuthPage(`Could not send OTP. ${e.message || "Check Supabase Auth settings."}`);
-  }
-
-  const targetField = document.getElementById("authTarget");
-  if (targetField) {
-    targetField.value = target;
-  }
+  applySession({
+    access_token: supabaseAnonKey,
+    user: { username: adminUsername }
+  });
 }
 
-async function verifyOtpCode() {
-  const otpInput = document.getElementById("authOtpCode");
-  const token = otpInput ? otpInput.value.trim() : "";
-
-  if (!pendingOtpTarget || !pendingOtpType) {
-    renderAuthPage("Send an OTP first.");
-    return;
-  }
-
-  if (!token) {
-    renderAuthPage("Enter the OTP code you received.");
-    return;
-  }
-
-  try {
-    const payload = pendingOtpType === "email"
-      ? { email: pendingOtpTarget, token, type: "email" }
-      : { phone: pendingOtpTarget, token, type: "sms" };
-
-    const { data, error } = await supabaseClient.auth.verifyOtp(payload);
-
-    if (error) {
-      throw error;
-    }
-
-    pendingOtpTarget = "";
-    pendingOtpType = "";
-    applySession(data.session || null);
-  } catch (e) {
-    console.warn("Could not verify OTP:", e);
-    renderAuthPage(`Could not verify OTP. ${e.message || "Please try again."}`);
-    const otpField = document.getElementById("authOtpCode");
-    if (otpField) {
-      otpField.value = token;
-    }
-  }
-}
-
-async function signOutUser() {
-  await supabaseClient.auth.signOut();
+function signOutUser() {
+  applySession(null);
 }
 
 function showAuthenticatedApp() {
@@ -1228,12 +1141,7 @@ function applySession(session) {
 }
 
 async function initAuth() {
-  const { data } = await supabaseClient.auth.getSession();
-  applySession(data.session || null);
-
-  supabaseClient.auth.onAuthStateChange((_event, session) => {
-    applySession(session);
-  });
+  applySession(null);
 }
 
 function getLicenseOptions(selectedLicense) {
@@ -1323,7 +1231,7 @@ function loadMainPage() {
 
 function openRing(ring) {
   if (!currentSession) {
-    showAuthOnly("Sign in with OTP to open ring pages.");
+    showAuthOnly("Sign in to open ring pages.");
     return;
   }
 
@@ -1339,7 +1247,7 @@ function openRing(ring) {
 
 function openDevicesPage() {
   if (!currentSession) {
-    showAuthOnly("Sign in with OTP to open device details.");
+    showAuthOnly("Sign in to open device details.");
     return;
   }
 
