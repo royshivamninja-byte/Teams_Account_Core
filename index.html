@@ -52,6 +52,25 @@ body {
   max-width: 1100px;
 }
 
+.header-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.header-action {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  box-shadow: none;
+  color: white;
+}
+
+.header-action:hover {
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+}
+
 .eyebrow {
   color: #bfdbfe;
   font-size: 12px;
@@ -482,6 +501,11 @@ button:active {
     font-size: 28px;
   }
 
+  .header-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+
   .section-title,
   .toolbar {
     align-items: flex-start;
@@ -511,6 +535,9 @@ button:active {
     <h1>Teams Core Account</h1>
     <p>Choose a ring, manage credentials, and create account requests from one clean workspace.</p>
     <div class="app-badge">Android-ready PWA | Install from Chrome menu on Android</div>
+    <div class="header-actions">
+      <button class="header-action" onclick="openDevicesPage()">Open Device Details</button>
+    </div>
   </div>
 </div>
 
@@ -956,22 +983,12 @@ async function refreshAccountsFromSupabase(forceRefresh = false) {
 function loadMainPage() {
   const container = document.getElementById("mainPage");
   container.innerHTML = `
-    <div class="panel" style="margin-bottom: 22px;">
-      <div class="toolbar">
-        <div>
-          <h2>Workspace Sections</h2>
-          <p>Open ring-based account management or go straight to the shared device-details page.</p>
-        </div>
-        <button class="secondary-btn" onclick="openDevicesPage()">Device Details</button>
-      </div>
-      <div class="panel-note">${getAllDevices().length} devices tracked across all sections.</div>
-    </div>
-
     <div class="section-title">
       <div>
         <h2>Select a ring</h2>
         <span>${rings.length} environments available</span>
       </div>
+      <span>${getAllDevices().length} devices tracked separately</span>
     </div>
     <div class="scenario-strip">
       <div class="scenario-item scenario-blue">
