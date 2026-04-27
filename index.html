@@ -86,7 +86,7 @@ body {
   margin: 0;
 }
 
-.header p:last-child {
+.header-subtitle {
   color: #dbeafe;
   font-size: 15px;
   line-height: 1.5;
@@ -483,6 +483,62 @@ button:active {
   margin: 10px 0 0;
 }
 
+.auth-shell {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: calc(100vh - 220px);
+}
+
+.auth-card {
+  max-width: 520px;
+  width: 100%;
+}
+
+.auth-toggle {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.auth-toggle button {
+  justify-content: center;
+}
+
+.ghost-btn {
+  background: white;
+  border-color: var(--line);
+  box-shadow: none;
+  color: #334155;
+}
+
+.ghost-btn:hover {
+  background: #f8fafc;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+}
+
+.auth-active {
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+  box-shadow: 0 10px 20px rgba(37, 99, 235, 0.18);
+  color: white;
+}
+
+.auth-status {
+  color: var(--muted);
+  font-size: 14px;
+  margin-top: 12px;
+  min-height: 21px;
+}
+
+.header-user {
+  align-items: center;
+  color: #dbeafe;
+  display: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .app-badge {
   background: rgba(191, 219, 254, 0.14);
   border: 1px solid rgba(191, 219, 254, 0.28);
@@ -533,13 +589,17 @@ button:active {
   <div class="header-inner">
     <p class="eyebrow">Account Management</p>
     <h1>Teams Core Account</h1>
-    <p>Choose a ring, manage credentials, and create account requests from one clean workspace.</p>
+    <p class="header-subtitle">Choose a ring, manage credentials, and create account requests from one clean workspace.</p>
     <div class="app-badge">Android-ready PWA | Install from Chrome menu on Android</div>
     <div class="header-actions">
-      <button class="header-action" onclick="openDevicesPage()">Open Device Details</button>
+      <span class="header-user" id="userBadge"></span>
+      <button class="header-action" id="deviceNavButton" onclick="openDevicesPage()" style="display:none;">Open Device Details</button>
+      <button class="header-action" id="signOutButton" onclick="signOutUser()" style="display:none;">Sign Out</button>
     </div>
   </div>
 </div>
+
+<div class="container" id="authPage"></div>
 
 <div class="container" id="mainPage"></div>
 
@@ -547,6 +607,7 @@ button:active {
 
 <div class="container" id="devicePage" style="display:none;"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 const rings = ["Ring 0", "Ring 1", "Ring 2", "Ring 4", "EDU", "GCCH", "DoD", "Gallatin", "Auth"];
 
@@ -554,15 +615,22 @@ let accountsData = {};
 let devicesData = {};
 const storageKey = "teamsCoreAccountsData";
 const deviceStorageKey = "teamsCoreDevicesData";
+const supabaseUrl = "https://iseuuvohaskhjmblqfqr.supabase.co";
 const supabaseAccountsUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/accounts";
 const supabaseDevicesUrl = "https://iseuuvohaskhjmblqfqr.supabase.co/rest/v1/devices";
 const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlzZXV1dm9oYXNraGptYmxxZnFyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5MzYzNzUsImV4cCI6MjA5MjUxMjM3NX0.LnrZkxi7ajawWdQ_9k2wFuWWRgm0DaRhdlHISUH-x5Q";
+const supabaseClient = window.supabase.createClient(supabaseUrl, supabaseAnonKey);
 const licenses = ["Microsoft 365 E3", "Microsoft 365 E5", "Teams Essentials"];
 const refreshIntervalMs = 3000;
 let currentRing = null;
 let refreshTimer = null;
 let deviceSyncAvailable = true;
 let currentView = "main";
+let currentSession = null;
+let authMode = "email";
+let pendingOtpTarget = "";
+let pendingOtpType = "";
+let appInitialized = false;
 
 const ringScenarios = {
   "Ring 0": { label: "Pilot", tone: "pilot" },
@@ -590,9 +658,12 @@ function resetDevicesData() {
 }
 
 function getSupabaseHeaders(prefer) {
+  const bearerToken = currentSession && currentSession.access_token
+    ? currentSession.access_token
+    : supabaseAnonKey;
   const headers = {
     apikey: supabaseAnonKey,
-    Authorization: `Bearer ${supabaseAnonKey}`,
+    Authorization: `Bearer ${bearerToken}`,
     "Content-Type": "application/json"
   };
 
@@ -940,6 +1011,231 @@ function escapeAttribute(value) {
     .replaceAll(">", "&gt;");
 }
 
+function updateHeaderAuthUI() {
+  const userBadge = document.getElementById("userBadge");
+  const deviceNavButton = document.getElementById("deviceNavButton");
+  const signOutButton = document.getElementById("signOutButton");
+
+  if (!userBadge || !deviceNavButton || !signOutButton) {
+    return;
+  }
+
+  if (currentSession && currentSession.user) {
+    const userLabel = currentSession.user.email || currentSession.user.phone || "Signed in";
+    userBadge.textContent = userLabel;
+    userBadge.style.display = "inline-flex";
+    deviceNavButton.style.display = "inline-flex";
+    signOutButton.style.display = "inline-flex";
+  } else {
+    userBadge.textContent = "";
+    userBadge.style.display = "none";
+    deviceNavButton.style.display = "none";
+    signOutButton.style.display = "none";
+  }
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  pendingOtpTarget = "";
+  pendingOtpType = "";
+  renderAuthPage("");
+}
+
+function renderAuthPage(statusMessage = "") {
+  const authPage = document.getElementById("authPage");
+  authPage.style.display = "block";
+  authPage.innerHTML = `
+    <div class="auth-shell">
+      <div class="panel auth-card">
+        <div class="toolbar">
+          <div>
+            <h2>Secure Login</h2>
+            <p>Use a one-time password by email or phone to access the Teams Core workspace.</p>
+          </div>
+        </div>
+
+        <div class="auth-toggle">
+          <button class="${authMode === "email" ? "auth-active" : "ghost-btn"}" onclick="setAuthMode('email')">Email OTP</button>
+          <button class="${authMode === "phone" ? "auth-active" : "ghost-btn"}" onclick="setAuthMode('phone')">Phone OTP</button>
+        </div>
+
+        <div class="form-grid">
+          <div style="grid-column: 1 / -1;">
+            <label>${authMode === "email" ? "Work Email" : "Phone Number"}</label>
+            <input
+              id="authTarget"
+              type="${authMode === "email" ? "email" : "tel"}"
+              placeholder="${authMode === "email" ? "name@company.com" : "+919876543210"}"
+            >
+          </div>
+
+          <div style="grid-column: 1 / -1;">
+            <label>OTP Code</label>
+            <input id="authOtpCode" inputmode="numeric" placeholder="Enter the code you received">
+          </div>
+        </div>
+
+        <div class="button-row">
+          <button class="secondary-btn" onclick="sendOtpCode()">Send OTP</button>
+          <button onclick="verifyOtpCode()">Verify OTP</button>
+        </div>
+
+        <div class="auth-status">${escapeAttribute(statusMessage || (authMode === "phone"
+          ? "Phone OTP requires Supabase Phone Auth with an SMS provider configured."
+          : "Email OTP requires the Supabase email template to send a token code."))}</div>
+      </div>
+    </div>
+  `;
+}
+
+function hideAllPages() {
+  document.getElementById("authPage").style.display = "none";
+  document.getElementById("mainPage").style.display = "none";
+  document.getElementById("accountPage").style.display = "none";
+  document.getElementById("devicePage").style.display = "none";
+}
+
+async function sendOtpCode() {
+  const targetInput = document.getElementById("authTarget");
+  const target = targetInput ? targetInput.value.trim() : "";
+
+  if (!target) {
+    renderAuthPage(`Enter your ${authMode === "email" ? "email" : "phone number"} first.`);
+    return;
+  }
+
+  try {
+    if (authMode === "email") {
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        email: target,
+        options: { shouldCreateUser: true }
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      pendingOtpTarget = target;
+      pendingOtpType = "email";
+      renderAuthPage(`OTP sent to ${target}. Check your inbox for the code.`);
+    } else {
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        phone: target
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      pendingOtpTarget = target;
+      pendingOtpType = "sms";
+      renderAuthPage(`OTP sent to ${target}. Check your SMS messages for the code.`);
+    }
+  } catch (e) {
+    console.warn("Could not send OTP:", e);
+    renderAuthPage(`Could not send OTP. ${e.message || "Check Supabase Auth settings."}`);
+  }
+
+  const targetField = document.getElementById("authTarget");
+  if (targetField) {
+    targetField.value = target;
+  }
+}
+
+async function verifyOtpCode() {
+  const otpInput = document.getElementById("authOtpCode");
+  const token = otpInput ? otpInput.value.trim() : "";
+
+  if (!pendingOtpTarget || !pendingOtpType) {
+    renderAuthPage("Send an OTP first.");
+    return;
+  }
+
+  if (!token) {
+    renderAuthPage("Enter the OTP code you received.");
+    return;
+  }
+
+  try {
+    const payload = pendingOtpType === "email"
+      ? { email: pendingOtpTarget, token, type: "email" }
+      : { phone: pendingOtpTarget, token, type: "sms" };
+
+    const { data, error } = await supabaseClient.auth.verifyOtp(payload);
+
+    if (error) {
+      throw error;
+    }
+
+    pendingOtpTarget = "";
+    pendingOtpType = "";
+    applySession(data.session || null);
+  } catch (e) {
+    console.warn("Could not verify OTP:", e);
+    renderAuthPage(`Could not verify OTP. ${e.message || "Please try again."}`);
+    const otpField = document.getElementById("authOtpCode");
+    if (otpField) {
+      otpField.value = token;
+    }
+  }
+}
+
+async function signOutUser() {
+  await supabaseClient.auth.signOut();
+}
+
+function showAuthenticatedApp() {
+  hideAllPages();
+
+  if (!appInitialized) {
+    initApp();
+    return;
+  }
+
+  if (currentView === "accounts" && currentRing) {
+    document.getElementById("accountPage").style.display = "block";
+    renderAccounts(currentRing);
+    return;
+  }
+
+  if (currentView === "devices") {
+    document.getElementById("devicePage").style.display = "block";
+    renderDevicesPage();
+    return;
+  }
+
+  currentView = "main";
+  document.getElementById("mainPage").style.display = "block";
+  loadMainPage();
+}
+
+function showAuthOnly(message = "") {
+  currentView = "auth";
+  currentRing = null;
+  hideAllPages();
+  renderAuthPage(message);
+}
+
+function applySession(session) {
+  currentSession = session;
+  updateHeaderAuthUI();
+
+  if (currentSession) {
+    showAuthenticatedApp();
+  } else {
+    showAuthOnly();
+  }
+}
+
+async function initAuth() {
+  const { data } = await supabaseClient.auth.getSession();
+  applySession(data.session || null);
+
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    applySession(session);
+  });
+}
+
 function getLicenseOptions(selectedLicense) {
   return licenses.map(license => `
     <option ${license === selectedLicense ? "selected" : ""}>${escapeAttribute(license)}</option>
@@ -1026,6 +1322,11 @@ function loadMainPage() {
 }
 
 function openRing(ring) {
+  if (!currentSession) {
+    showAuthOnly("Sign in with OTP to open ring pages.");
+    return;
+  }
+
   currentRing = ring;
   currentView = "accounts";
   document.getElementById("mainPage").style.display = "none";
@@ -1037,6 +1338,11 @@ function openRing(ring) {
 }
 
 function openDevicesPage() {
+  if (!currentSession) {
+    showAuthOnly("Sign in with OTP to open device details.");
+    return;
+  }
+
   currentView = "devices";
   currentRing = null;
   document.getElementById("mainPage").style.display = "none";
@@ -1453,6 +1759,7 @@ function goHome() {
 }
 
 async function initApp() {
+  appInitialized = true;
   const loadedFromLocalStorage = loadSavedAccounts();
   const loadedDevicesFromLocalStorage = loadSavedDevices();
   loadMainPage();
@@ -1486,6 +1793,7 @@ async function initApp() {
   }
 
   refreshTimer = setInterval(refreshAccountsFromSupabase, refreshIntervalMs);
+  showAuthenticatedApp();
 }
 
 if ("serviceWorker" in navigator) {
@@ -1496,7 +1804,7 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-initApp();
+initAuth();
 </script>
 
 </body>
